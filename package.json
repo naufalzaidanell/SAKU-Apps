@@ -1,0 +1,22 @@
+{
+  "name": "saku-production",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "install:backend": "npm install --include=dev",
+    "build": "npm --prefix apps/backend run build",
+    "start": "npm --prefix apps/backend run start:prod",
+    "verify": "npm --prefix apps/backend run verify",
+    "verify:android": "node scripts-android-gate.mjs",
+    "verify:static": "npm --prefix apps/backend run prod:check && npm run verify:android",
+    "install:android": "npm --prefix apps ci",
+    "verify:all-static": "npm run verify:static && node --check apps/mobile-web/app.js && node --check apps/admin-web/admin.js",
+    "build:android:production": "bash scripts/build-production-android.sh"
+  },
+  "workspaces": [
+    "apps/backend"
+  ]
+}

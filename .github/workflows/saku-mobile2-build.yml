@@ -1,0 +1,85 @@
+name: SAKU Mobile 2 Legacy Native Preview
+
+on:
+  push:
+    branches:
+      - agent/saku-mobile-2-release-ready
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Verify native source is finalized
+        run: |
+          python mobile2/tools/finalize_native.py
+          git diff --check
+          git diff --exit-code
+
+      - name: Verify public backend health
+        run: |
+          curl --fail --silent --show-error --max-time 15 https://saku-backend-live-production.up.railway.app/health
+          echo
+
+      - name: Setup Java 17
+        uses: actions/setup-java@3487f54461fe81d2d61c9e3b374b8504291689fa # pinned
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@07976c6290703d34c16d382cb36445f98bb43b1f # pinned
+
+      - name: Install Android API 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244 # pinned
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Unit test and build preview artifact
+        working-directory: mobile2
+        run: |
+          gradle --no-daemon --stacktrace testDebugUnitTest assembleDebug -PSAKU_ENVIRONMENT=uat
+
+      - name: Release hygiene gate
+        run: |
+          engineering_labels="$(grep -RniE '\b(UAT|DEV|STAGING|DEBUG|MOCK)\b' mobile2/app/src/main/java mobile2/app/src/main/res \
+            | grep -vE '^mobile2/app/src/main/java/com/saku/umkm/EndpointPolicy\.kt:' || true)"
+          if [ -n "$engineering_labels" ]; then
+            printf '%s\n' "$engineering_labels"
+            echo "Internal engineering label found in user-facing source" >&2
+            exit 1
+          fi
+          if grep -RniE 'localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.' mobile2/app/src/main/java mobile2/app/src/main/res; then
+            echo "Local/private endpoint found in mobile source" >&2
+            exit 1
+          fi
+
+      - name: Verify APK and bundle
+        run: |
+          APK=mobile2/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          sha256sum "$APK" | tee mobile2/SHA256SUMS.txt
+
+      - name: Upload SAKU Mobile 2 artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: saku-mobile2-native-preview
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            mobile2/app/build/outputs/apk/debug/app-debug.apk
+            mobile2/SHA256SUMS.txt

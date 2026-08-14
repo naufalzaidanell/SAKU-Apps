@@ -1,0 +1,5 @@
+run = "npm start"
+
+[deployment]
+run = "npm start"
+build = "npm install --include=dev && npm run build"

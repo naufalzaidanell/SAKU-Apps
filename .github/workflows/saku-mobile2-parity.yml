@@ -1,0 +1,93 @@
+name: SAKU Mobile 2 Native Parity
+
+on:
+  push:
+    branches:
+      - agent/saku-mobile-2-release-ready
+    paths:
+      - '.github/workflows/saku-mobile2-parity.yml'
+      - 'mobile2/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout native branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Java 17
+        uses: actions/setup-java@3487f54461fe81d2d61c9e3b374b8504291689fa # pinned
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@07976c6290703d34c16d382cb36445f98bb43b1f # pinned
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244 # pinned
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Verify live dependencies
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 15 https://saku-backend-live-production.up.railway.app/health
+          echo
+
+      - name: Build native parity APK
+        working-directory: mobile2
+        run: |
+          set -euo pipefail
+          gradle --no-daemon testDebugUnitTest assembleDebug -PSAKU_ENVIRONMENT=uat
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Execute live user journey through native UI
+        uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: true
+          script: |
+            set -eu
+            mkdir -p mobile2/parity-evidence
+            adb install -r mobile2/app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm clear com.saku.umkm.mobile2preview
+            adb shell am start -W -n com.saku.umkm.mobile2preview/com.saku.umkm.MainActivity > mobile2/parity-evidence/launch.txt
+            test -n "$(adb shell pidof com.saku.umkm.mobile2preview | tr -d '\r')"
+            python3 mobile2/tools/parity_ui_v2.py
+
+      - name: Verify parity evidence and app log
+        if: success()
+        run: |
+          set -euo pipefail
+          test -s mobile2/parity-evidence/PARITY_PASS.txt
+          grep -q 'SAKU_MOBILE2_NATIVE_PARITY_PASS' mobile2/parity-evidence/PARITY_PASS.txt
+          ! grep -E 'FATAL EXCEPTION|AndroidRuntime:.*FATAL' mobile2/parity-evidence/logcat.txt >/dev/null
+          cat mobile2/parity-evidence/PARITY_PASS.txt
+
+      - name: Upload native parity evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: saku-mobile2-native-parity-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            mobile2/parity-evidence/*.png
+            mobile2/parity-evidence/*.xml
+            mobile2/parity-evidence/*.txt

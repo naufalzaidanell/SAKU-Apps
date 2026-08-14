@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Builds / caches
+dist/
+build/
+.next/
+coverage/
+.turbo/
+.gradle/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python legacy artifacts
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Runtime
+*.log
+*.db
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+__MACOSX/
+
+# Android generated
+**/android/build/
+**/android/app/build/
+**/android/.gradle/
+**/android/local.properties

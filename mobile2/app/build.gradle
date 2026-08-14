@@ -1,0 +1,117 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') || it.toLowerCase().contains('publish') }
+def sakuEnvironment = (project.findProperty('SAKU_ENVIRONMENT') ?: System.getenv('SAKU_ENVIRONMENT') ?: (releaseRequested ? 'production' : 'uat')).toString().trim().toLowerCase()
+def canonicalOrigins = [
+    uat: 'https://saku-backend-live-production.up.railway.app',
+    production: 'https://saku-backend-production.up.railway.app',
+]
+if (!canonicalOrigins.containsKey(sakuEnvironment)) throw new GradleException('SAKU_ENVIRONMENT must be uat or production')
+def apiBase = canonicalOrigins[sakuEnvironment]
+def apiOverride = (project.findProperty('SAKU_API_BASE_URL') ?: System.getenv('SAKU_API_BASE_URL') ?: apiBase).toString().replaceAll('/+$','')
+def onboardingOverride = (project.findProperty('SAKU_ONBOARDING_BASE_URL') ?: System.getenv('SAKU_ONBOARDING_BASE_URL') ?: apiBase).toString().replaceAll('/+$','')
+if (apiOverride != apiBase || onboardingOverride != apiBase) throw new GradleException('SAKU endpoint configuration does not match the approved environment origin')
+def googleWebClientId = (project.findProperty('GOOGLE_WEB_CLIENT_ID') ?: System.getenv('GOOGLE_WEB_CLIENT_ID') ?: '').toString()
+def esc = { String v -> v.replace('\\','\\\\').replace('"','\\"') }
+
+def releaseKeystoreFile = System.getenv('SAKU_KEYSTORE_FILE')
+def releaseKeystorePassword = System.getenv('SAKU_KEYSTORE_PASSWORD')
+def releaseKeyAlias = System.getenv('SAKU_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('SAKU_KEY_PASSWORD')
+def releaseSigningReady = [releaseKeystoreFile, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword].every { it != null && !it.trim().isEmpty() }
+def expectedReleaseSigner = '554748911350737B6F6DEC4F3F3AAC2AC9B2C72F992C07C345109A6148FC6514'
+def declaredReleaseSigner = (System.getenv('SAKU_SIGNER_SHA256') ?: '').replaceAll('[^A-Fa-f0-9]','').toUpperCase()
+if (releaseRequested && sakuEnvironment != 'production') throw new GradleException('Release tasks require the production environment')
+if (releaseRequested && !releaseSigningReady) throw new GradleException('Production release signing environment is incomplete')
+if (releaseRequested && declaredReleaseSigner != expectedReleaseSigner) throw new GradleException('Production signer fingerprint is not the approved SAKU identity')
+if (releaseRequested && googleWebClientId.trim().isEmpty()) throw new GradleException('GOOGLE_WEB_CLIENT_ID is required for a production release')
+
+android {
+    namespace 'com.saku.umkm'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.saku.umkm'
+        minSdk 24
+        targetSdk 36
+        versionCode 2000002
+        versionName '2.0.0-rc.2'
+        buildConfigField 'String', 'SAKU_ENVIRONMENT', '"' + esc(sakuEnvironment) + '"'
+        buildConfigField 'String', 'SAKU_API_BASE_URL', '"' + esc(apiBase) + '"'
+        buildConfigField 'String', 'SAKU_ONBOARDING_BASE_URL', '"' + esc(apiBase) + '"'
+        buildConfigField 'String', 'GOOGLE_WEB_CLIENT_ID', '"' + esc(googleWebClientId) + '"'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseKeystoreFile)
+                storePassword releaseKeystorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.mobile2preview'
+            versionNameSuffix '-debug'
+        }
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    buildFeatures {
+        compose true
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    packaging {
+        resources.excludes += ['/META-INF/{AL2.0,LGPL2.1}']
+    }
+}
+
+dependencies {
+    def composeBom = platform('androidx.compose:compose-bom:2026.06.01')
+    implementation composeBom
+    androidTestImplementation composeBom
+
+    implementation 'androidx.core:core-ktx:1.18.0'
+    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.10.0'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation 'com.squareup.okhttp3:okhttp:5.3.0'
+
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+}
