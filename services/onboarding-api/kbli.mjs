@@ -1,6 +1,71 @@
 import {pool, publicPool} from './db.mjs';
 import {boundedInteger} from './security.mjs';
+
+const ACTIVE_KBLI_VERSION = 'KBLI2025';
 const norm=v=>String(v||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-export async function version(){const r=await publicPool.query('SELECT version,source_name AS "sourceName",source_url AS "sourceUrl",sync_status AS "syncStatus",entry_count AS "entryCount",expected_level5_count AS "expectedLevel5Count",is_active AS "isActive" FROM reference_kbli_versions WHERE version=\'KBLI2025\' LIMIT 1');return r.rows[0]||null;}
-export async function search(url){const q=String(url.searchParams.get('q')||'').trim();if(!q||q.length>120)throw Object.assign(new Error('INVALID_QUERY'),{status:400});const region=String(url.searchParams.get('region')||'DIY').slice(0,20),limit=boundedInteger(url.searchParams.get('limit'),24,1,50),normalized=norm(q);const a=await publicPool.query("SELECT expanded_query,priority FROM reference_kbli_aliases WHERE version='KBLI2025' AND region IN ($2,'ID') AND (lower(alias)=lower($1) OR lower(alias) LIKE lower($1)||'%' OR lower($1) LIKE lower(alias)||'%') ORDER BY CASE WHEN lower(alias)=lower($1) THEN 0 ELSE 1 END,priority DESC LIMIT 1",[q,region]);const alias=a.rows[0],expanded=norm(alias?.expanded_query||q),tokens=[...new Set(expanded.split(' ').filter(x=>x.length>=3))].slice(0,12);const r=await publicPool.query(`SELECT code,title,category,version,source_url AS "sourceUrl",(CASE WHEN code=$1 THEN 1200 WHEN code LIKE $1||'%' THEN 1000 WHEN lower(title)=lower($1) THEN 950 WHEN lower(title) LIKE lower($1)||'%' THEN 820 WHEN lower(title) LIKE '%'||lower($1)||'%' THEN 700 WHEN search_text LIKE '%'||$2||'%' THEN 560 ELSE 0 END+COALESCE((SELECT count(*)::int*80 FROM unnest($3::text[]) token WHERE search_text LIKE '%'||token||'%'),0)+$4::int) AS score FROM reference_kbli_entries WHERE version='KBLI2025' AND active=true AND(code LIKE $1||'%' OR lower(title) LIKE '%'||lower($1)||'%' OR search_text LIKE '%'||$2||'%' OR EXISTS(SELECT 1 FROM unnest($3::text[]) token WHERE search_text LIKE '%'||token||'%')) ORDER BY score DESC,title ASC LIMIT $5`,[q,normalized,tokens,Number(alias?.priority||0),limit]);return{query:q,expandedQuery:alias?.expanded_query||null,region,results:r.rows,fallbackAvailable:r.rows.length===0};}
-export async function validate(primary,secondary=[]){const codes=[primary?.code,...secondary.map(x=>x?.code)].filter(Boolean),unique=[...new Set(codes)];if(!unique.length)throw Object.assign(new Error('PRIMARY_CLASSIFICATION_REQUIRED'),{status:400});const r=await pool.query("SELECT code,title,category FROM reference_kbli_entries WHERE version='KBLI2025' AND active=true AND code=ANY($1::text[])",[unique]);if(r.rows.length!==unique.length)throw Object.assign(new Error('INVALID_KBLI_CLASSIFICATION'),{status:400});return new Map(r.rows.map(x=>[x.code,x]));}
+
+export async function version(){
+  const r=await publicPool.query(
+    `SELECT version,source_name AS "sourceName",source_url AS "sourceUrl",sync_status AS "syncStatus",
+            entry_count AS "entryCount",expected_level5_count AS "expectedLevel5Count",is_active AS "isActive"
+       FROM reference_kbli_versions
+      WHERE version=$1 AND is_active=true
+      LIMIT 1`,
+    [ACTIVE_KBLI_VERSION],
+  );
+  return r.rows[0]||null;
+}
+
+export async function search(url){
+  const q=String(url.searchParams.get('q')||'').trim();
+  if(!q||q.length>120)throw Object.assign(new Error('INVALID_QUERY'),{status:400});
+  const region=String(url.searchParams.get('region')||'DIY').slice(0,20);
+  const limit=boundedInteger(url.searchParams.get('limit'),24,1,50);
+  const normalized=norm(q);
+  const a=await publicPool.query(
+    `SELECT expanded_query,priority
+       FROM reference_kbli_aliases
+      WHERE version=$3 AND region IN ($2,'ID')
+        AND (lower(alias)=lower($1) OR lower(alias) LIKE lower($1)||'%' OR lower($1) LIKE lower(alias)||'%')
+      ORDER BY CASE WHEN lower(alias)=lower($1) THEN 0 ELSE 1 END,priority DESC
+      LIMIT 1`,
+    [q,region,ACTIVE_KBLI_VERSION],
+  );
+  const alias=a.rows[0];
+  const expanded=norm(alias?.expanded_query||q);
+  const tokens=[...new Set(expanded.split(' ').filter(x=>x.length>=3))].slice(0,12);
+  const r=await publicPool.query(
+    `SELECT code,title,category,version,source_url AS "sourceUrl",
+            (CASE WHEN code=$1 THEN 1200
+                  WHEN code LIKE $1||'%' THEN 1000
+                  WHEN lower(title)=lower($1) THEN 950
+                  WHEN lower(title) LIKE lower($1)||'%' THEN 820
+                  WHEN lower(title) LIKE '%'||lower($1)||'%' THEN 700
+                  WHEN search_text LIKE '%'||$2||'%' THEN 560 ELSE 0 END
+             + COALESCE((SELECT count(*)::int*80 FROM unnest($3::text[]) token WHERE search_text LIKE '%'||token||'%'),0)
+             + $4::int) AS score
+       FROM reference_kbli_entries
+      WHERE version=$6 AND active=true
+        AND (code LIKE $1||'%' OR lower(title) LIKE '%'||lower($1)||'%' OR search_text LIKE '%'||$2||'%'
+             OR EXISTS(SELECT 1 FROM unnest($3::text[]) token WHERE search_text LIKE '%'||token||'%'))
+      ORDER BY score DESC,title ASC
+      LIMIT $5`,
+    [q,normalized,tokens,Number(alias?.priority||0),limit,ACTIVE_KBLI_VERSION],
+  );
+  return{query:q,expandedQuery:alias?.expanded_query||null,region,version:ACTIVE_KBLI_VERSION,results:r.rows,fallbackAvailable:r.rows.length===0};
+}
+
+export async function validate(primary,secondary=[]){
+  const codes=[primary?.code,...secondary.map(x=>x?.code)].filter(Boolean);
+  const unique=[...new Set(codes)];
+  if(!unique.length)throw Object.assign(new Error('PRIMARY_CLASSIFICATION_REQUIRED'),{status:400});
+  if(unique.length>9)throw Object.assign(new Error('TOO_MANY_KBLI_CLASSIFICATIONS'),{status:400});
+  const r=await pool.query(
+    `SELECT code,title,category,version
+       FROM reference_kbli_entries
+      WHERE version=$2 AND active=true AND code=ANY($1::text[])`,
+    [unique,ACTIVE_KBLI_VERSION],
+  );
+  if(r.rows.length!==unique.length)throw Object.assign(new Error('INVALID_KBLI_CLASSIFICATION'),{status:400});
+  return new Map(r.rows.map(x=>[x.code,Object.freeze({code:x.code,title:x.title,category:x.category,version:x.version})]));
+}

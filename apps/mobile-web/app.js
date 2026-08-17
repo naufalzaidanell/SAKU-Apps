@@ -20,7 +20,6 @@
   const apiConfigured = () => approvedOrigins[String(cfg.environment||'').toLowerCase()]===String(cfg.apiBaseUrl||'').replace(/\/$/,'') && String(cfg.onboardingBaseUrl||cfg.apiBaseUrl||'').replace(/\/$/,'')===String(cfg.apiBaseUrl||'').replace(/\/$/,'');
   const plugins = () => window.Capacitor?.Plugins || {};
   const secure = () => plugins().SakuSecureSession;
-  const google = () => plugins().SakuGoogleSignIn;
   const reportExport = () => plugins().SakuReportExport;
   let currentTheme = 'light';
   const appearance = () => plugins().SakuAppearance;
@@ -328,7 +327,11 @@
         <div class="field"><label>Password</label><input name="password" type="password" required minlength="${register?12:1}" autocomplete="${register?'new-password':'current-password'}"></div>
         <button class="btn primary full" type="submit">${register?'Daftar & lanjutkan':'Masuk ke Sistem'}</button>
       </form>
-      <button class="btn google" id="googleBtn" type="button">G&nbsp;&nbsp; Lanjutkan dengan Google</button>
+      <div class="auth-divider" role="separator"><span>atau</span></div>
+      <div class="social-entry" aria-label="Opsi masuk lainnya">
+        <button class="btn social-auth google visual-only" type="button" disabled aria-disabled="true"><b>G</b><span>Lanjutkan dengan Google<small>Segera hadir</small></span></button>
+        <button class="btn social-auth apple visual-only" type="button" disabled aria-disabled="true"><b aria-hidden="true"></b><span>Lanjutkan dengan Apple<small>Segera hadir</small></span></button>
+      </div>
       <div class="switch">${register?'Sudah punya akun?':'Belum punya akun?'} <button class="link" id="modeBtn">${register?'Masuk':'Daftar gratis'}</button></div>
       </section></div></main>`;
     $('#modeBtn').onclick=()=>authView(register?'login':'register');
@@ -336,13 +339,6 @@
       e.preventDefault(); const fd=new FormData(e.currentTarget); const btn=$('button[type=submit]',e.currentTarget); btn.disabled=true;
       try{ const payload=Object.fromEntries(fd.entries()); const data=await request(register?'/api/auth/register':'/api/auth/login',{method:'POST',body:JSON.stringify(payload)},false); await acceptSession(data); }
       catch(err){toast(message(err));} finally{btn.disabled=false;}
-    };
-    $('#googleBtn').onclick=async()=>{
-      if(!google()?.signIn){toast('Google Sign-In tersedia pada aplikasi Android production.');return;}
-      if(!cfg.googleWebClientId || /REPLACE_WITH/.test(cfg.googleWebClientId)){toast('Google Client ID belum dikonfigurasi.');return;}
-      const b=$('#googleBtn');b.disabled=true;
-      try{ const challenge=await request('/api/auth/google/challenge',{method:'POST',body:'{}'},false); const g=await google().signIn({serverClientId:cfg.googleWebClientId,nonce:challenge.nonce}); const data=await request('/api/auth/google',{method:'POST',body:JSON.stringify({idToken:g.idToken,nonce:challenge.nonce})},false); await acceptSession(data); }
-      catch(err){toast(message(err));}finally{b.disabled=false;}
     };
   }
 
